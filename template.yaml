@@ -1,0 +1,502 @@
+# Copyright 2021 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  salesforce-eventbridge-sentiment-analysis
+
+  Sample SAM Template for salesforce-eventbridge-sentiment-analysis
+
+Parameters:
+  SalesforceOauthUrl:
+    Type: String
+    Description: 'Salesforce Url for OAuth authentication. e.g: https://MyDomainNameSandboxName.my.salesforce.com/services/oauth2/token'
+  SalesforceOauthClientId:
+    Type: String
+    Description: 'Salesforce Integration Application Client ID'
+  SalesforceOauthClientSecret:
+    Type: String
+    Description: 'Salesforce Integration Application Client Secret'
+  SalesforceUsername:
+    Type: String
+    Description: 'Username of Salesforce integration User'
+  SalesforcePassword:
+    Type: String
+    Description: 'Password of Salesforce integration User'
+  SalesforceCaseProcessorEndpointUrl:
+    Type: String
+    Description: 'Salesforce Endpoint Url to post event from EventBridge. e.g: Custom platform events– https://myDomainName.my.salesforce.com/services/data/versionNumber/sobjects/customPlatformEndpoint/*'
+  SalesforcePartnerEventBusArn:
+    Type: String
+    Description: 'Salesforce partner eventbus arn created from the Console. Stream salesforce events directly to Amazon EventBridge.'
+  SalesforcePartnerEventPattern:
+    Type: String
+    Description: 'Salesforce partner event pattern interested to stream to eventbridge. eg: {"detail-type": ["Carbon_Comparison__e"]}'
+  SFEnrichCaseEndpointUrl:
+    Type: String
+    Description: 'Salesforce Endpoint Url to post event from Enrich Case app. e.g: Custom platform events– https://myDomainName.my.salesforce.com/services/data/versionNumber/sobjects/customPlatformEndpoint/*'
+
+
+# More info about Globals: https://github.com/awslabs/serverless-application-model/blob/master/docs/globals.rst
+Globals:
+  Function:
+    Timeout: 60
+
+Resources:
+
+  ####################################################################
+  #       App 1: Enrich Case Application Configuration               #
+  ####################################################################
+  OrdersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      AttributeDefinitions:
+        - AttributeName: CustomerID
+          AttributeType: S
+        - AttributeName: OrderID
+          AttributeType: S
+      KeySchema:
+        - AttributeName: CustomerID
+          KeyType: HASH
+        - AttributeName: OrderID
+          KeyType: RANGE
+      ProvisionedThroughput:
+        ReadCapacityUnits: 1
+        WriteCapacityUnits: 1
+
+  EnrichCaseApplication:
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: Process new Salesforce Events and Enrich Case with Customer Data
+      Handler: src/enrich-case-app/handlers/handler.appHandler
+      Runtime: nodejs14.x
+      Architectures:
+        - x86_64
+      MemorySize: 1024
+      Timeout: 120
+      Tracing: Active
+      Role: !GetAtt EnrichCaseApplicationRole.Arn
+      ReservedConcurrentExecutions: 1
+      Environment:
+        Variables:
+          ORDERS_TABLE_NAME: !Ref OrdersTable
+          API_DESTINATION_EVENT_BUS: !Ref EventbridgeToSalesforceEventbus
+
+  EventInvokeConfig:
+    Type: AWS::Lambda::EventInvokeConfig
+    Properties:
+      FunctionName: !Ref EnrichCaseApplication
+      Qualifier: "$LATEST"
+      MaximumEventAgeInSeconds: 600
+      MaximumRetryAttempts: 0
+      DestinationConfig:
+        OnSuccess:
+          Destination: !GetAtt EventbridgeToSalesforceEventbus.Arn
+        OnFailure:
+          Destination: !GetAtt EnrichCaseApplicationDLQ.Arn
+
+  EnrichCaseApplicationDLQ:
+    Type: AWS::SQS::Queue
+
+  EnrichCaseApplicationRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Path: /
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: AllowEventBridgePutEvents
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - events:PutEvents
+                Resource: !GetAtt EventbridgeToSalesforceEventbus.Arn
+              - Effect: Allow
+                Action:
+                  - sqs:SendMessage
+                Resource: !GetAtt EnrichCaseApplicationDLQ.Arn
+              - Effect: Allow
+                Action:
+                  - 'dynamodb:Get*'
+                  - 'dynamodb:Query'
+                  - 'dynamodb:Scan'
+                  - 'dynamodb:Put*'
+                  - 'dynamodb:Update*'
+                Resource: !GetAtt OrdersTable.Arn
+
+  #######################################################################################
+  #       Sentiment Analysis Case Processor Application Configuration                  #
+  #######################################################################################
+
+  # State machine to process Salesforce cases.
+  CaseProcessorStateMachineLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: 'CaseProcessorStateMachineLogGroup'
+      RetentionInDays: 7
+
+  CaseProcessorStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Logging:
+        Level: ALL
+        Destinations:
+          - CloudWatchLogsLogGroup:
+              LogGroupArn: !GetAtt CaseProcessorStateMachineLogGroup.Arn
+      DefinitionUri: stateMachine/caseProcessor.json
+      Type: STANDARD
+      Tracing:
+        Enabled: true
+      Role: !GetAtt CaseProcessorExecutionRole.Arn
+
+  # EventBridge rule to send Sentiment Analysis event back to SalesForce
+  CaseProcessorEventRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: "EventBridge rule to send Sentiment Analysis event back to SalesForce"
+      EventBusName: !Ref EventbridgeToSalesforceEventbus
+      EventPattern:
+        source:
+          - "SentimentAnalysis"
+        account:
+          - !Ref AWS::AccountId
+      State: "ENABLED"
+      Targets:
+        # Cloudwatch target
+        - Arn: !GetAtt ApiDestinationEventsToSFLogGroup.Arn
+          Id: LogTarget
+        # API Destination target
+        -
+          Id: SalesforceAPIDestination
+          RoleArn: !GetAtt EventbridgeAPIDestinationRole.Arn
+          Arn: !GetAtt SalesforceDestination.Arn
+          DeadLetterConfig:
+            Arn: !GetAtt CaseProcessorAPIDestinationDLQ.Arn
+          RetryPolicy:
+            MaximumRetryAttempts: 10
+          InputTransformer:
+            InputPathsMap:
+              {
+                "Sentiment": "$.detail.Sentiment.Sentiment",
+                "CaseID": "$.detail.id"
+              }
+            InputTemplate: '{"Sentiment__c":<Sentiment>,"CaseID__c":<CaseID>}'
+
+  # EventBridge rule to send Sentiment Analysis event back to SalesForce
+  EnrichCaseAppEventRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: "EventBridge rule to send customer recent orders to SalesForce"
+      EventBusName: !Ref EventbridgeToSalesforceEventbus
+      EventPattern:
+        source:
+          - "case.enrich"
+        account:
+          - !Ref AWS::AccountId
+      State: "ENABLED"
+      Targets:
+        # Cloudwatch target
+        - Arn: !GetAtt ApiDestinationEventsToSFLogGroup.Arn
+          Id: LogTarget
+        # API Destination target
+        - Id: EnrichCaseApiDestination
+          RoleArn: !GetAtt EventbridgeAPIDestinationRole.Arn
+          Arn: !GetAtt EnrichCaseApiDestination.Arn
+          DeadLetterConfig:
+            Arn: !GetAtt CaseProcessorAPIDestinationDLQ.Arn
+          RetryPolicy:
+            MaximumRetryAttempts: 3
+          InputTransformer:
+            InputPathsMap:
+              {
+                "AmountPaid": "$.detail.amount_paid",
+                "ItemsPurchased": "$.detail.items_purchased",
+                "OrderDate": "$.detail.order_date",
+                "CaseID": "$.detail.case_id"
+              }
+            InputTemplate: '{"AmountPaid__c":<AmountPaid>,"ItemsPurchased__c":<ItemsPurchased>,"OrderDate__c":<OrderDate>,"CaseID__c":<CaseID>}'
+
+  # DLQ for case processor events that could not be sent to Salesforce
+  CaseProcessorAPIDestinationDLQ:
+    Type: AWS::SQS::Queue
+
+  CaseProcessorAPIDestinationDLQPolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action:
+              - sqs:SendMessage
+            Resource: !GetAtt CaseProcessorAPIDestinationDLQ.Arn
+      Queues:
+        - Ref: CaseProcessorAPIDestinationDLQ
+
+  # State machine to process Salesforce cases IAM permissions
+  CaseProcessorExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: AllowCloudWatchLogs
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "logs:CreateLogDelivery"
+                  - "logs:GetLogDelivery"
+                  - "logs:UpdateLogDelivery"
+                  - "logs:DeleteLogDelivery"
+                  - "logs:ListLogDeliveries"
+                  - "logs:PutLogEvents"
+                  - "logs:PutResourcePolicy"
+                  - "logs:DescribeResourcePolicies"
+                  - "logs:DescribeLogGroups"
+                Resource: "*"
+        - PolicyName: AllowEventBridgePutEvents
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action: "events:PutEvents"
+                Resource: !GetAtt EventbridgeToSalesforceEventbus.Arn
+        - PolicyName: AllowPinpointNumberValidation
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action: "mobiletargeting:PhoneNumberValidate"
+                Resource: "*"
+        - PolicyName: AllowComprehendDetectSentiment
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action: "comprehend:DetectSentiment"
+                Resource: "*"
+        - PolicyName: AllowSNSPublish
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action: "sns:publish"
+                Resource: "*"
+
+  ##################################################################################
+  #                   API Destination to Salesforce Configuration                  #
+  ##################################################################################
+  # Eventbus used to send events to Salesforce
+  EventbridgeToSalesforceEventbus:
+    Type: AWS::Events::EventBus
+    Properties:
+      Name: EventbridgeToSalesforceEventbus
+  # API Destination IAM Permissions
+  EventbridgeAPIDestinationRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - events.amazonaws.com
+            Action:
+              - sts:AssumeRole      
+      Policies:
+        - PolicyName: AllowAPIDestinationAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: 'events:InvokeApiDestination'
+                Resource: [!GetAtt SalesforceDestination.Arn, !GetAtt EnrichCaseApiDestination.Arn]
+  # Establishing Connection to Salesforce Account
+  SalesforceConnection:
+    Type: AWS::Events::Connection
+    Properties:
+      Description: 'My connection with Salesforce through OAuth'
+      AuthorizationType: OAUTH_CLIENT_CREDENTIALS
+      AuthParameters:
+        OAuthParameters:
+          AuthorizationEndpoint: !Ref SalesforceOauthUrl
+          ClientParameters:
+            ClientID: !Ref SalesforceOauthClientId
+            ClientSecret: !Ref SalesforceOauthClientSecret
+          HttpMethod: POST
+          OAuthHttpParameters:
+            BodyParameters:
+              - Key: 'grant_type'
+                Value: 'password'
+                IsValueSecret: 'false'
+              - Key: 'username'
+                Value: !Ref SalesforceUsername
+                IsValueSecret: 'true'
+              - Key: 'password'
+                Value: !Ref SalesforcePassword
+                IsValueSecret: 'true'
+  # API Destination to SalesForce
+  SalesforceDestination:
+    Type: AWS::Events::ApiDestination
+    Properties:
+      Name: 'SalesforceAPIDestination'
+      ConnectionArn:
+        Fn::GetAtt: [ SalesforceConnection, Arn ]
+      InvocationEndpoint: !Ref SalesforceCaseProcessorEndpointUrl
+      HttpMethod: POST
+      InvocationRateLimitPerSecond: 10
+
+  # Enrich Case API Destination Config
+  EnrichCaseApiDestination:
+    Type: AWS::Events::ApiDestination
+    Properties:
+      Name: 'SFEnrichCaseEndpointUrl'
+      ConnectionArn:
+        Fn::GetAtt: [ SalesforceConnection, Arn ]
+      InvocationEndpoint: !Ref SFEnrichCaseEndpointUrl
+      HttpMethod: POST
+      InvocationRateLimitPerSecond: 10
+
+  # EventBridge rule to stream salesforce events directly to Amazon EventBridge.
+  SalesforceEventDeliveryRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: "Stream salesforce events directly to Amazon EventBridge"
+      EventBusName: !Ref SalesforcePartnerEventBusArn
+      EventPattern: !Ref SalesforcePartnerEventPattern
+      State: "ENABLED"
+      Targets:
+        - Arn: !GetAtt CaseProcessorStateMachine.Arn
+          Id: SalesforceEventTarget
+          RoleArn: !GetAtt ExecuteCaseProcessorStateMachineRole.Arn
+          DeadLetterConfig:
+            Arn: !GetAtt SalesforceEventDeliveryDLQ.Arn
+        - Arn: !GetAtt EnrichCaseApplication.Arn
+          Id: EnrichCaseApplication
+          DeadLetterConfig:
+            Arn: !GetAtt SalesforceEventDeliveryDLQ.Arn
+ # EventBridge IAM Role to start statemachine processor
+  ExecuteCaseProcessorStateMachineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - events.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: "/"
+      Policies:
+        -
+          PolicyName: 'ExecuteCaseProcessorStateMachinePolicy'
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action:
+                  - "states:StartExecution"
+                Resource: !GetAtt CaseProcessorStateMachine.Arn
+  # Permission for EventBridge to invoke Lambda
+  PermissionForEventsToInvokeLambda:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref EnrichCaseApplication
+      Principal: events.amazonaws.com
+      Action: lambda:InvokeFunction
+      SourceArn: !GetAtt SalesforceEventDeliveryRule.Arn
+
+  # DLQ for case processor events that could not be sent to Salesforce
+  SalesforceEventDeliveryDLQ:
+    Type: AWS::SQS::Queue
+
+  SalesforceEventDeliveryDLQPolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action:
+              - sqs:SendMessage
+            Resource: !GetAtt SalesforceEventDeliveryDLQ.Arn
+      Queues:
+        - Ref: SalesforceEventDeliveryDLQ
+  ##########################################################################################
+  #             Capture API Destination events to CloudWatch Logs Configuration            #
+  ##########################################################################################
+  # API Destination Log group to capture Eventbridge events sent to Salesforce
+  ApiDestinationEventsToSFLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: 'ApiDestinationEventsToSFLogGroup'
+      RetentionInDays: 7
+  # IAM Resource Policy to allow eventbridge to push events to Cloudwatch
+  LogGroupForEventsPolicy:
+    Type: AWS::Logs::ResourcePolicy
+    Properties:
+      PolicyName: EventBridgeToCWLogsPolicy
+      PolicyDocument: !Sub >
+        {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "EventBridgetoCWLogsCreateLogStreamPolicy",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": [
+                  "events.amazonaws.com"
+                ]
+              },
+              "Action": [
+                "logs:CreateLogStream"
+              ],
+              "Resource": [
+                "${ApiDestinationEventsToSFLogGroup.Arn}"
+              ]
+            },
+            {
+              "Sid": "EventBridgetoCWLogsPutLogEventsPolicy",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": [
+                  "events.amazonaws.com"
+                ]
+              },
+              "Action": [
+                "logs:PutLogEvents"
+              ],
+              "Resource": [
+                "${ApiDestinationEventsToSFLogGroup.Arn}"
+              ],
+              "Condition": {
+                "ArnEquals": {"AWS:SourceArn": ["${CaseProcessorEventRule.Arn}", "${EnrichCaseAppEventRule.Arn}"]}
+              }
+            }
+          ]
+        }

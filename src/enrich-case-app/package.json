@@ -1,0 +1,16 @@
+{
+    "name": "eventbridge-salesforce-integration",
+    "description": "salesforce-eventbridge-integration",
+    "version": "0.0.1",
+    "private": true,
+    "dependencies": {
+        "aws-sdk": "^2.1160.0",
+        "@aws-sdk/client-eventbridge": "^3.118.1"
+    },
+    "devDependencies": {
+        "jest": "^26.6.3"
+    },
+    "scripts": {
+        "test": "jest"
+    }
+}

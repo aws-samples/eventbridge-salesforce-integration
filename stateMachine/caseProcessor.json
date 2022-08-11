@@ -1,0 +1,113 @@
+{
+  "Comment": "A description of my state machine",
+  "StartAt": "DetectTicketSentiment",
+  "States": {
+    "DetectTicketSentiment": {
+      "Type": "Task",
+      "Parameters": {
+        "LanguageCode": "en",
+        "Text.$": "$.detail.payload.Description__c"
+      },
+      "Resource": "arn:aws:states:::aws-sdk:comprehend:detectSentiment",
+      "Next": "MobileNumberValidate",
+      "ResultPath": "$.Sentiment",
+      "ResultSelector": {
+        "Sentiment.$": "$.Sentiment"
+      }
+    },
+    "MobileNumberValidate": {
+      "Type": "Task",
+      "Next": "ActionRouter",
+      "Parameters": {
+        "NumberValidateRequest": {
+          "PhoneNumber.$": "$.detail.payload.Phone_Number__c",
+          "IsoCountryCode": "US"
+        }
+      },
+      "Resource": "arn:aws:states:::aws-sdk:pinpoint:phoneNumberValidate",
+      "ResultPath": "$.PhoneTypeCode",
+      "ResultSelector": {
+        "PhoneTypeCode.$": "$.NumberValidateResponse.PhoneTypeCode"
+      }
+    },
+    "ActionRouter": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$.PhoneTypeCode.PhoneTypeCode",
+              "NumericEquals": 0
+            },
+            {
+              "Variable": "$.Sentiment.Sentiment",
+              "StringEquals": "NEGATIVE"
+            }
+          ],
+          "Next": "NegativeOutreach"
+        },
+        {
+          "And": [
+            {
+              "Variable": "$.PhoneTypeCode.PhoneTypeCode",
+              "NumericEquals": 0
+            },
+            {
+              "Variable": "$.Sentiment.Sentiment",
+              "StringEquals": "POSITIVE"
+            }
+          ],
+          "Next": "PositiveOutreach"
+        },
+        {
+          "Not": {
+            "Variable": "$.PhoneTypeCode.PhoneTypeCode",
+            "NumericEquals": 0
+          },
+          "Next": "UpdateCaseSentiment"
+        }
+      ]
+    },
+    "PositiveOutreach": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "PhoneNumber.$": "$.detail.payload.Phone_Number__c",
+        "Message": "Thanks for your message. We're glad you were satisfied with our services."
+      },
+      "Next": "UpdateCaseSentiment",
+      "ResultPath": "$.SMSResponse"
+    },
+    "NegativeOutreach": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "PhoneNumber.$": "$.detail.payload.Phone_Number__c",
+        "Message": "We are disappointed to hear you were not satisfied with our services. We will reach out to you to gather more details."
+      },
+      "Next": "UpdateCaseSentiment",
+      "ResultPath": "$.SMSResponse"
+    },
+    "UpdateCaseSentiment": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::events:putEvents",
+      "Parameters": {
+        "Entries": [
+          {
+            "Detail": {
+              "id.$": "$.detail.payload.CaseID__c",
+              "Sentiment.$": "$.Sentiment"
+            },
+            "DetailType": "transaction",
+            "EventBusName": "EventbridgeToSalesforceEventbus",
+            "Source": "SentimentAnalysis"
+          }
+        ]
+      },
+      "Next": "Success"
+    },
+    "Success": {
+      "Type": "Succeed"
+    }
+  }
+}
