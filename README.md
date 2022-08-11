@@ -25,8 +25,7 @@ To use the SAM CLI, you need the following tools.
 
 ### Step 1: Create Secrets Variable
 [Learn more about AWS Secret Manager](https://docs.aws.amazon.com/secretsmanager/latest/userguide/managing-secrets.html)
-> :warning: For security best practices, we recommend that you create the following variable with AWS Secret Managers 
-> Otherwise you can directly pass in values for the bellow parameters to **Skip to Step 2**
+> :warning: For security best practices, we recommend that you create the following variable with AWS Secret Managers, otherwise you can directly pass in values for the bellow parameters during deplopyment **Skip to Step 2**
 - SalesforceOauthClientId
 - SalesforceOauthClientSecret
 - SalesforceUsername
