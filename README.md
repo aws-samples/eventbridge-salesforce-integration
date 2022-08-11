@@ -21,17 +21,70 @@ To use the SAM CLI, you need the following tools.
 * Docker - [Install Docker community edition](https://hub.docker.com/search/?type=edition&offering=community)
 * AWS CLI - [Install & Configure AWS Credentials](https://docs.aws.amazon.com/cli/latest/userguide/cli-chap-configure.html)
 
-### Deployment
+## Deployment
+
+### Step 1: Create Secrets Variable
+[Learn more about AWS Secret Manager](https://docs.aws.amazon.com/secretsmanager/latest/userguide/managing-secrets.html)
+> :warning: For security best practices, we recommend that you create the following variable with AWS Secret Managers 
+> Otherwise you can directly pass in values for the bellow parameters to **Skip to Step 2**
+- SalesforceOauthClientId
+- SalesforceOauthClientSecret
+- SalesforceUsername
+- SalesforcePassword
+
+> :warning: **DO NOT CHANGE SECRET `KEY`.** 
+> These `keys` are referenced on the cloudformation template. Update `value` attribute with your corresponding values during deployment.
+
+```bash
+aws secretsmanager create-secret \
+    --name SalesforceOauthClientId \
+    --description "Salesforce Integration Application Client ID." \
+    --secret-string "{\"Key\":\"SalesforceOauthClientId\",\"Value\":\"INPUT VALUE HERE\"}"
+    
+aws secretsmanager create-secret \
+    --name SalesforceOauthClientSecret \
+    --description "Salesforce Integration Application Client Secret." \
+    --secret-string "{\"Key\":\"SalesforceOauthClientSecret\",\"Value\":\"INPUT VALUE HERE\"}"
+    
+aws secretsmanager create-secret \
+    --name SalesforceUsername \
+    --description "Username of Salesforce integration User." \
+    --secret-string "{\"Key\":\"SalesforceUsername\",\"Value\":\"INPUT VALUE HERE\"}"
+    
+aws secretsmanager create-secret \
+    --name SalesforcePassword \
+    --description "Password of Salesforce integration User." \
+    --secret-string "{\"Key\":\"SalesforcePassword\",\"Value\":\"INPUT VALUE HERE\"}"
+```
+
+Sample output 
+```bash
+{
+  "ARN": "arn:aws:secretsmanager:us-west-2:123456789012:secret:SalesforcePassword-a1b2c3",
+  "Name": "SalesforcePassword",
+  "VersionId": "a1b2c3d4-5678-90ab-cdef-EXAMPLE11111"
+}
+```
+
+> :warning: **Navigate to AWS Secret Manager Console to double-check that secret value have been correctly set.**
+> For each secret retrieve and view the secret value for validation.
+
+### Step 2. Install Dependencies
+Navigate to `src/enrich-case-app` and run cmd
+
+```bash
+eventbridge-salesforce-integration$ cd src/enrich-case-app
+eventbridge-salesforce-integration$ npm install
+```
+
+### Step 3. Build and Deploy
 To build and deploy your application for the first time, run the following in your shell and follow the prompts
 
 The first command will build the source of your application. The second command will package and deploy your application to AWS, with a series of prompts:
 
 ```bash
-salesforce-eventbridge-sentiment-analysis$ cd src/enrich-case-app
-salesforce-eventbridge-sentiment-analysis$ npm install
-salesforce-eventbridge-sentiment-analysis$ cd ../../
-salesforce-eventbridge-sentiment-analysis$ sam build
-salesforce-eventbridge-sentiment-analysis$ sam deploy --guided
+eventbridge-salesforce-integration$ sam build
+eventbridge-salesforce-integration$ sam deploy --guided
 ```
 
 * **Stack Name**: The name of the stack to deploy to CloudFormation. This should be unique to your account and region, and a good starting point would be something matching your project name.
@@ -40,12 +93,12 @@ salesforce-eventbridge-sentiment-analysis$ sam deploy --guided
 * **Allow SAM CLI IAM role creation**: Many AWS SAM templates, including this example, create AWS IAM roles required for the AWS Lambda function(s) included to access AWS services. By default, these are scoped down to minimum required permissions. To deploy an AWS CloudFormation stack which creates or modifies IAM roles, the `CAPABILITY_IAM` value for `capabilities` must be provided. If permission isn't provided through this prompt, to deploy this example you must explicitly pass `--capabilities CAPABILITY_IAM` to the `sam deploy` command.
 * **Save arguments to samconfig.toml**: If set to yes, your choices will be saved to a configuration file inside the project, so that in the future you can just re-run `sam deploy` without parameters to deploy changes to your application.
 
-## Cleanup
+## Step 4. Cleanup
 
 To delete the sample application that you created, use the AWS CLI. Assuming you used your project name for the stack name, you can run the following:
 
 ```bash
-salesforce-eventbridge-sentiment-analysis$ aws sam delete --stack-name <stack name>
+eventbridge-salesforce-integration$ aws sam delete --stack-name <stack name>
 ```
 
 ## Resources
