@@ -1,3 +1,5 @@
+This project is a prototype. If you decided to deploy this work in production environment, please conduct your own security reviews and incorporate security controls commensurate with the data classification whitin your organization. (e.g., when S3 is created they should check to make sure BPA is enabled and/or encryption is enabled based on data sensitivity).
+
 # EventBridge Salesforce Integration
 
 AWS now supports Salesforce as a partner event source for Amazon EventBridge, allowing you to send Salesforce events to AWS. You can also configure Salesforce as an EventBridge API Destination and send EventBridge events to Salesforce. These integrations enable you to act on changes to your Salesforce data in real-time and build custom applications with EventBridge and over 100 built-in sources and targets.
