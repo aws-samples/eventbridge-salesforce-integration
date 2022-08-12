@@ -283,15 +283,9 @@ Resources:
             Statement:
               - Effect: Allow
                 Action:
-                  - "logs:CreateLogDelivery"
-                  - "logs:GetLogDelivery"
-                  - "logs:UpdateLogDelivery"
-                  - "logs:DeleteLogDelivery"
-                  - "logs:ListLogDeliveries"
+                  - "logs:CreateLogGroup"
+                  - "logs:CreateLogStream"
                   - "logs:PutLogEvents"
-                  - "logs:PutResourcePolicy"
-                  - "logs:DescribeResourcePolicies"
-                  - "logs:DescribeLogGroups"
                 Resource: "*"
         - PolicyName: AllowEventBridgePutEvents
           PolicyDocument:
