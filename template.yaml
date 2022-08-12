@@ -4,9 +4,12 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: >
-  salesforce-eventbridge-sentiment-analysis
+  EventBridge Salesforce Sentiment Analysis
 
-  Sample SAM Template for salesforce-eventbridge-sentiment-analysis
+  AWS now supports Salesforce as a partner event source for Amazon EventBridge, allowing you to send Salesforce events to AWS. 
+  You can also configure Salesforce as an EventBridge API Destination and send EventBridge events to Salesforce. 
+  These integrations enable you to act on changes to your Salesforce data in real-time and build custom applications 
+  with EventBridge and over 100 built-in sources and targets.
 
 Parameters:
   SalesforceOauthUrl:
@@ -15,15 +18,31 @@ Parameters:
   SalesforceOauthClientId:
     Type: String
     Description: 'Salesforce Integration Application Client ID'
+    NoEcho: true
+    MinLength: 1
+    MaxLength: 256
+    Default: '{{resolve:secretsmanager:SalesforceOauthClientId:SecretString:Value}}'
   SalesforceOauthClientSecret:
     Type: String
     Description: 'Salesforce Integration Application Client Secret'
+    NoEcho: true
+    MinLength: 1
+    MaxLength: 256
+    Default: '{{resolve:secretsmanager:SalesforceOauthClientSecret:SecretString:Value}}'
   SalesforceUsername:
     Type: String
     Description: 'Username of Salesforce integration User'
+    NoEcho: true
+    MinLength: 1
+    MaxLength: 128
+    Default: '{{resolve:secretsmanager:SalesforceUsername:SecretString:Value}}'
   SalesforcePassword:
     Type: String
     Description: 'Password of Salesforce integration User'
+    NoEcho: true
+    MinLength: 1
+    MaxLength: 128
+    Default: '{{resolve:secretsmanager:SalesforcePassword:SecretString:Value}}'
   SalesforceCaseProcessorEndpointUrl:
     Type: String
     Description: 'Salesforce Endpoint Url to post event from EventBridge. e.g: Custom platform events– https://myDomainName.my.salesforce.com/services/data/versionNumber/sobjects/customPlatformEndpoint/*'
@@ -51,7 +70,6 @@ Resources:
   OrdersTable:
     Type: AWS::DynamoDB::Table
     Properties:
-      BillingMode: PAY_PER_REQUEST
       PointInTimeRecoverySpecification:
         PointInTimeRecoveryEnabled: true
       AttributeDefinitions:
@@ -265,15 +283,9 @@ Resources:
             Statement:
               - Effect: Allow
                 Action:
-                  - "logs:CreateLogDelivery"
-                  - "logs:GetLogDelivery"
-                  - "logs:UpdateLogDelivery"
-                  - "logs:DeleteLogDelivery"
-                  - "logs:ListLogDeliveries"
+                  - "logs:CreateLogGroup"
+                  - "logs:CreateLogStream"
                   - "logs:PutLogEvents"
-                  - "logs:PutResourcePolicy"
-                  - "logs:DescribeResourcePolicies"
-                  - "logs:DescribeLogGroups"
                 Resource: "*"
         - PolicyName: AllowEventBridgePutEvents
           PolicyDocument:
